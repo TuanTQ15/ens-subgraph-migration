@@ -725,7 +725,7 @@ processor.run(new TypeormDatabase({ supportHotBlocks: true }), async (ctx) => {
     console.log(header.height);
     for (const log of logs) {
       processDataENSRegistry(log, header);
-      processResolver(log, header);
+      processResolver(log, header); // range error at 4299559
       processDataRegistrar(log, header);
       processDataNameWrapper(log, header);
     }
