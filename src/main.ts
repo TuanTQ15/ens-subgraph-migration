@@ -53,14 +53,6 @@ import {
   ExpiryExtended,
 } from './model';
 
-const blockOwnerErrors = [5648711, 7460548];
-
-const blockResolverErrors = [
-  4320255, 4332464, 4178274, 4239675, 4310110, 4320164, 3944761, 4047241,
-  4106083, 4164386, 4332469, 3800374, 3924727, 3938314, 4332476, 4332480,
-  4332485, 4567184, 4672102, 4672102, 4819759, 5081141, 5097049, 5286861,
-  6221020, 6320912, 6320920, 6461181, 6651468, 6651507,
-];
 const domainLabels = new Map<string, string>();
 const domains = new Map<string, Domain>();
 const accounts = new Map<string, Account>();
@@ -98,8 +90,6 @@ function processDataENSRegistry(evmLog: Log, header: BlockHeader): any {
 
   if (evmLog.address == ENS_REGISTRY_CONTRACT) {
     if (evmLog.topics[0] === EnsRegistryEvent.NewOwner.topic) {
-      if (blockOwnerErrors.includes(height)) return null;
-
       const { node, label, owner } = EnsRegistryEvent.NewOwner.decode(evmLog);
       EnsRegistryHandler.handleNewOwner(
         {
@@ -121,7 +111,6 @@ function processDataENSRegistry(evmLog: Log, header: BlockHeader): any {
     }
 
     if (evmLog.topics[0] === EnsRegistryEvent.NewResolver.topic) {
-      if (blockResolverErrors.includes(height)) return null;
       const { node, resolver } = EnsRegistryEvent.NewResolver.decode(evmLog);
 
       EnsRegistryHandler.handleNewResolver(
@@ -178,8 +167,6 @@ function processDataENSRegistry(evmLog: Log, header: BlockHeader): any {
     }
   } else if (evmLog.address == ENS_REGISTRY_OLD_CONTRACT) {
     if (evmLog.topics[0] === EnsRegistryEvent.NewOwner.topic) {
-      if (blockOwnerErrors.includes(height)) return null;
-
       const { node, label, owner } = EnsRegistryEvent.NewOwner.decode(evmLog);
       EnsRegistryHandler.handleNewOwnerOldRegistry(
         {
@@ -199,7 +186,7 @@ function processDataENSRegistry(evmLog: Log, header: BlockHeader): any {
       );
     }
     if (evmLog.topics[0] === EnsRegistryEvent.NewResolver.topic) {
-      if (blockResolverErrors.includes(height)) return null;
+      // if (blockResolverErrors.includes(height)) return null;
       const { node, resolver } = EnsRegistryEvent.NewResolver.decode(evmLog);
 
       EnsRegistryHandler.handleNewResolverOldRegistry(
@@ -411,54 +398,56 @@ function processResolver(evmLog: Log, header: BlockHeader) {
     );
   }
 
-  // got RangeError: data out-of-bounds (buffer=0x, length=0, offset=32, code=BUFFER_OVERRUN, version=6.7.0)
-  if (
-    evmLog.topics[0] ===
-    PublicResolverEvent['TextChanged(bytes32,string,string)'].topic
-  ) {
-    const { node, key } =
-      PublicResolverEvent['TextChanged(bytes32,string,string)'].decode(evmLog);
-    ResolverHandler.handleTextChanged(
-      {
-        address: evmLog.address,
-        blockNumber: height,
-        logIndex: evmLog.logIndex,
-        hash,
-        node,
-        key,
-      },
-      domains,
-      resolvers,
-      resolverEvents,
-      textChangedEvents,
-    );
-  }
+  // // got RangeError: data out-of-bounds (buffer=0x, length=0, offset=32, code=BUFFER_OVERRUN, version=6.7.0)
+  // if (
+  //   evmLog.topics[0] ===
+  //   PublicResolverEvent['TextChanged(bytes32,string,string)'].topic
+  // ) {
+  //   if (blockRangeOutOf.includes(height)) return;
+  //   const { node, key } =
+  //     PublicResolverEvent['TextChanged(bytes32,string,string)'].decode(evmLog);
+  //   ResolverHandler.handleTextChanged(
+  //     {
+  //       address: evmLog.address,
+  //       blockNumber: height,
+  //       logIndex: evmLog.logIndex,
+  //       hash,
+  //       node,
+  //       key,
+  //     },
+  //     domains,
+  //     resolvers,
+  //     resolverEvents,
+  //     textChangedEvents,
+  //   );
+  // }
 
-  //got RangeError: data out-of-bounds (buffer=0x, length=0, offset=32, code=BUFFER_OVERRUN, version=6.7.0)
-  if (
-    evmLog.topics[0] ===
-    PublicResolverEvent['TextChanged(bytes32,string,string,string)'].topic
-  ) {
-    const { node, key, value } =
-      PublicResolverEvent['TextChanged(bytes32,string,string,string)'].decode(
-        evmLog,
-      );
-    ResolverHandler.handleTextChangedWithValue(
-      {
-        address: evmLog.address,
-        blockNumber: height,
-        logIndex: evmLog.logIndex,
-        hash,
-        node,
-        key,
-        value,
-      },
-      domains,
-      resolvers,
-      resolverEvents,
-      textChangedEvents,
-    );
-  }
+  // //got RangeError: data out-of-bounds (buffer=0x, length=0, offset=32, code=BUFFER_OVERRUN, version=6.7.0)
+  // if (
+  //   evmLog.topics[0] ===
+  //   PublicResolverEvent['TextChanged(bytes32,string,string,string)'].topic
+  // ) {
+  //   if (blockRangeOutOf.includes(height)) return;
+  //   const { node, key, value } =
+  //     PublicResolverEvent['TextChanged(bytes32,string,string,string)'].decode(
+  //       evmLog,
+  //     );
+  //   ResolverHandler.handleTextChangedWithValue(
+  //     {
+  //       address: evmLog.address,
+  //       blockNumber: height,
+  //       logIndex: evmLog.logIndex,
+  //       hash,
+  //       node,
+  //       key,
+  //       value,
+  //     },
+  //     domains,
+  //     resolvers,
+  //     resolverEvents,
+  //     textChangedEvents,
+  //   );
+  // }
 
   if (evmLog.topics[0] === PublicResolverEvent.VersionChanged.topic) {
     const { node, newVersion } =
@@ -733,7 +722,7 @@ function processDataNameWrapper(evmLog: Log, header: BlockHeader) {
 processor.run(new TypeormDatabase({ supportHotBlocks: true }), async (ctx) => {
   for (const block of ctx.blocks) {
     const { header, logs } = block;
-
+    console.log(header.height);
     for (const log of logs) {
       processDataENSRegistry(log, header);
       processResolver(log, header);
@@ -742,15 +731,17 @@ processor.run(new TypeormDatabase({ supportHotBlocks: true }), async (ctx) => {
     }
   }
 
-  await ctx.store.upsert([...domains.values()]);
   await ctx.store.upsert([...accounts.values()]);
+  await ctx.store.upsert([...domains.values()]);
+  await ctx.store.upsert([...registrations.values()]);
   await ctx.store.upsert([...resolvers.values()]);
+
   await ctx.store.upsert([...newOwnerEvents.values()]);
-  await ctx.store.upsert([...domainEvents.values()]);
   await ctx.store.upsert([...newResolverEvents.values()]);
   await ctx.store.upsert([...transferEvents.values()]);
   await ctx.store.upsert([...newTTLEvents.values()]);
-  await ctx.store.upsert([...resolverEvents.values()]);
+  await ctx.store.upsert([...domainEvents.values()]);
+
   await ctx.store.upsert([...addrChangedEvents.values()]);
   await ctx.store.upsert([...changeAddressEvents.values()]);
   await ctx.store.upsert([...abiChangedEvents.values()]);
@@ -761,8 +752,8 @@ processor.run(new TypeormDatabase({ supportHotBlocks: true }), async (ctx) => {
   await ctx.store.upsert([...pubKeyChangedEvents.values()]);
   await ctx.store.upsert([...textChangedEvents.values()]);
   await ctx.store.upsert([...versionChangedEvents.values()]);
-  await ctx.store.upsert([...registrations.values()]);
-  await ctx.store.upsert([...registrationEvents.values()]);
+  await ctx.store.upsert([...resolverEvents.values()]);
+
   await ctx.store.upsert([...nameRegisteredEvents.values()]);
   await ctx.store.upsert([...nameRenewedEvents.values()]);
   await ctx.store.upsert([...nameTransferEvents.values()]);
@@ -772,4 +763,6 @@ processor.run(new TypeormDatabase({ supportHotBlocks: true }), async (ctx) => {
   await ctx.store.upsert([...wrappedTransfers.values()]);
   await ctx.store.upsert([...nameUnwrappedEvents.values()]);
   await ctx.store.upsert([...expiryExtendedEvents.values()]);
+
+  await ctx.store.upsert([...registrationEvents.values()]);
 });
