@@ -1,5 +1,7 @@
 import { NameWrapperInterface } from '../interfaces';
 import {
+  Account,
+  Domain,
   ExpiryExtended,
   FusesSet,
   NameUnwrapped,
@@ -72,9 +74,13 @@ function checkPccBurned(fuses: any): boolean {
   return (fuses & PARENT_CANNOT_CONTROL) == PARENT_CANNOT_CONTROL;
 }
 
-export async function handleNameWrapped(
+export function handleNameWrapped(
   data: NameWrapperInterface.INameWrapped,
-): Promise<void> {
+  domains: Map<string, Domain>,
+  accounts: Map<string, Account>,
+  wrappedDomains: Map<string, WrappedDomain>,
+  nameWrappedEvents: Map<string, NameWrapped>,
+) {
   const {
     name: inputName,
     node,
@@ -83,7 +89,6 @@ export async function handleNameWrapped(
     blockNumber,
     hash,
     owner,
-    ctx,
     logIndex,
   } = data;
   let decoded = decodeName(inputName);
@@ -93,8 +98,8 @@ export async function handleNameWrapped(
     label = decoded[0];
     name = decoded[1];
   }
-  let account = await createOrLoadAccount(ctx, owner);
-  let domain = await createOrLoadDomain(ctx, node);
+  let account = createOrLoadAccount(accounts, owner);
+  let domain = createOrLoadDomain(domains, node);
 
   if (!domain.labelName && label) {
     domain.labelName = label;
@@ -107,7 +112,7 @@ export async function handleNameWrapped(
     domain.expiryDate = expiry;
   }
   domain.wrappedOwner = account;
-  await ctx.store.save(domain);
+  domains.set(domain.id, domain);
 
   const wrappedDomain = new WrappedDomain({
     id: node,
@@ -130,24 +135,28 @@ export async function handleNameWrapped(
     transactionID: hexStringToUint8Array(hash),
   });
 
-  await ctx.store.save(wrappedDomain);
-  await ctx.store.save(nameWrappedEvent);
+  wrappedDomains.set(wrappedDomain.id, wrappedDomain);
+  nameWrappedEvents.set(nameWrappedEvent.id, nameWrappedEvent);
 }
 
-export async function handleNameUnwrapped(
+export function handleNameUnwrapped(
   data: NameWrapperInterface.INameUnwrapped,
-): Promise<void> {
-  const { node, owner, blockNumber, hash, logIndex, ctx } = data;
+  domains: Map<string, Domain>,
+  accounts: Map<string, Account>,
+  wrappedDomains: Map<string, WrappedDomain>,
+  nameUnwrappedEvents: Map<string, NameUnwrapped>,
+) {
+  const { node, owner, blockNumber, hash, logIndex } = data;
 
-  const account = await createOrLoadAccount(ctx, owner);
+  const account = createOrLoadAccount(accounts, owner);
 
-  const domain = await createOrLoadDomain(ctx, node);
+  const domain = createOrLoadDomain(domains, node);
 
   domain.wrappedOwner = null;
   if (domain.expiryDate && domain.parent && domain.parent.id !== ETH_NODE) {
     domain.expiryDate = null;
   }
-  await ctx.store.save(domain);
+  domains.set(domain.id, domain);
 
   const eventId = createEventID(blockNumber, logIndex);
 
@@ -159,24 +168,27 @@ export async function handleNameUnwrapped(
     transactionID: hexStringToUint8Array(hash),
   });
 
-  await ctx.store.save(nameUnwrappedEvent);
-  await ctx.store.remove(WrappedDomain, node);
+  nameUnwrappedEvents.set(nameUnwrappedEvent.id, nameUnwrappedEvent);
+  wrappedDomains.delete(node);
 }
 
-export async function handleFusesSet(
+export function handleFusesSet(
   data: NameWrapperInterface.IFusesSet,
-): Promise<void> {
-  const { ctx, node, fuses, blockNumber, logIndex, hash } = data;
+  domains: Map<string, Domain>,
+  wrappedDomains: Map<string, WrappedDomain>,
+  fusesSetEvents: Map<string, FusesSet>,
+) {
+  const { node, fuses, blockNumber, logIndex, hash } = data;
 
-  const wrappedDomain = await ctx.store.findOneBy(WrappedDomain, { id: node });
-  const domain = await createOrLoadDomain(ctx, node);
+  const wrappedDomain = wrappedDomains.get(node);
+  const domain = createOrLoadDomain(domains, node);
   if (wrappedDomain) {
     wrappedDomain.fuses = fuses;
-    await ctx.store.save(wrappedDomain);
+    wrappedDomains.set(wrappedDomain.id, wrappedDomain);
     if (wrappedDomain.expiryDate && checkPccBurned(wrappedDomain.fuses)) {
       if (!domain.expiryDate || wrappedDomain.expiryDate > domain.expiryDate!) {
         domain.expiryDate = wrappedDomain.expiryDate;
-        await ctx.store.save(domain);
+        domains.set(domain.id, domain);
       }
     }
   }
@@ -190,23 +202,26 @@ export async function handleFusesSet(
     transactionID: hexStringToUint8Array(hash),
   });
 
-  await ctx.store.save(fusesBurnedEvent);
+  fusesSetEvents.set(fusesBurnedEvent.id, fusesBurnedEvent);
 }
 
-export async function handleExpiryExtended(
+export function handleExpiryExtended(
   data: NameWrapperInterface.IExpiryExtended,
-): Promise<void> {
-  const { ctx, node, expiry, blockNumber, hash, logIndex } = data;
-  const wrappedDomain = await ctx.store.findOneBy(WrappedDomain, { id: node });
-  const domain = await createOrLoadDomain(ctx, node);
+  domains: Map<string, Domain>,
+  wrappedDomains: Map<string, WrappedDomain>,
+  expiryExtendedEvents: Map<string, ExpiryExtended>,
+) {
+  const { node, expiry, blockNumber, hash, logIndex } = data;
+  const wrappedDomain = wrappedDomains.get(node);
+  const domain = createOrLoadDomain(domains, node);
   if (wrappedDomain) {
     wrappedDomain.expiryDate = expiry;
-    await ctx.store.save(wrappedDomain);
+    wrappedDomains.set(wrappedDomain.id, wrappedDomain);
 
     if (checkPccBurned(wrappedDomain.fuses)) {
       if (!domain.expiryDate || expiry > domain.expiryDate!) {
         domain.expiryDate = expiry;
-        await ctx.store.save(domain);
+        domains.set(domain.id, domain);
       }
     }
   }
@@ -219,21 +234,22 @@ export async function handleExpiryExtended(
     blockNumber,
     transactionID: hexStringToUint8Array(hash),
   });
-
-  await ctx.store.save(expiryExtendedEvent);
+  expiryExtendedEvents.set(expiryExtendedEvent.id, expiryExtendedEvent);
 }
 
-export async function handleTransferSingle(
+export function handleTransferSingle(
   data: NameWrapperInterface.ITransferSingle,
-): Promise<void> {
-  const { ctx, to, id: node, blockNumber, logIndex, hash } = data;
-  const _to = await createOrLoadAccount(ctx, to);
+  accounts: Map<string, Account>,
+  domains: Map<string, Domain>,
+  wrappedDomains: Map<string, WrappedDomain>,
+  wrappedTransfers: Map<string, WrappedTransfer>,
+) {
+  const { to, id: node, blockNumber, logIndex, hash } = data;
+  const _to = createOrLoadAccount(accounts, to);
   const namehash = '0x' + node.toString().slice(2).padStart(64, '0');
-  const domain = await createOrLoadDomain(ctx, namehash);
+  const domain = createOrLoadDomain(domains, namehash);
 
-  const wrappedDomain = await ctx.store.findOneBy(WrappedDomain, {
-    id: namehash,
-  });
+  const wrappedDomain = wrappedDomains.get(namehash);
 
   // new registrations emit the Transfer` event before the NameWrapped event
   // so we need to create the WrappedDomain entity here
@@ -245,14 +261,14 @@ export async function handleTransferSingle(
     newWrappedDomain.expiryDate = BIG_INT_ZERO;
     newWrappedDomain.fuses = 0;
     newWrappedDomain.owner = _to;
-    await ctx.store.save(newWrappedDomain);
+    wrappedDomains.set(newWrappedDomain.id, newWrappedDomain);
   } else {
     wrappedDomain.owner = _to;
-    await ctx.store.save(wrappedDomain);
+    wrappedDomains.set(wrappedDomain.id, wrappedDomain);
   }
 
   domain.wrappedOwner = _to;
-  await ctx.store.save(domain);
+  domains.set(domain.id, domain);
 
   const eventId = createEventID(blockNumber, logIndex);
   const wrappedTransfer = new WrappedTransfer({
@@ -262,22 +278,31 @@ export async function handleTransferSingle(
     transactionID: hexStringToUint8Array(hash),
     wrappedTransferOwner: _to,
   });
-  await ctx.store.save(wrappedTransfer);
+  wrappedTransfers.set(wrappedTransfer.id, wrappedTransfer);
 }
 
-export async function handleTransferBatch(
+export function handleTransferBatch(
   data: NameWrapperInterface.ITransferBatch,
-): Promise<void> {
-  const { ids, ctx, to, blockNumber, logIndex, hash } = data;
+  accounts: Map<string, Account>,
+  domains: Map<string, Domain>,
+  wrappedDomains: Map<string, WrappedDomain>,
+  wrappedTransfers: Map<string, WrappedTransfer>,
+) {
+  const { ids, to, blockNumber, logIndex, hash } = data;
 
   for (let i = 0; i < ids.length; i++) {
-    await handleTransferSingle({
-      ctx,
-      to,
-      id: ids[i],
-      blockNumber,
-      logIndex,
-      hash,
-    });
+    handleTransferSingle(
+      {
+        to,
+        id: ids[i],
+        blockNumber,
+        logIndex,
+        hash,
+      },
+      accounts,
+      domains,
+      wrappedDomains,
+      wrappedTransfers,
+    );
   }
 }

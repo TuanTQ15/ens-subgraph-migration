@@ -10,6 +10,7 @@ import {
   NameRenewed,
   NameTransferred,
   Registration,
+  RegistrationEvent,
 } from '../model';
 import {
   byteArrayFromHex,
@@ -31,25 +32,27 @@ export const ETH_NODE =
 
 const rootNode = byteArrayFromHex(ETH_NODE);
 
-export async function handleNameRegistered(
+export function handleNameRegistered(
   data: EthRegistrarInterface.INameRegistered,
   domainLabels: Map<string, string>,
-): Promise<void> {
-  const { ctx, blockNumber, logIndex, hash, id, owner, expires, timestamp } =
-    data;
+  accounts: Map<string, Account>,
+  domains: Map<string, Domain>,
+  registrations: Map<string, Registration>,
+  registrationEvents: Map<string, RegistrationEvent>,
+  nameRegisteredEvents: Map<string, NameRegistered>,
+) {
+  const { blockNumber, logIndex, hash, id, owner, expires, timestamp } = data;
 
   let account = new Account({
     id: owner,
   });
 
-  await ctx.store.save(account);
+  accounts.set(account.id, account);
 
   const label = uint256ToUint8Array(id);
 
   const domainId = keccak256(concatUint8Arrays(rootNode, label));
-  const domain = await ctx.store.findOneBy(Domain, {
-    id: domainId,
-  });
+  const domain = domains.get(domainId);
 
   if (!domain) return;
   const registration = new Registration({
@@ -71,37 +74,35 @@ export async function handleNameRegistered(
   }
 
   const eventId = createEventID(blockNumber, logIndex);
-  const registrationEvent = new NameRegistered({
+
+  const eventData = {
     id: eventId,
     registration,
     blockNumber,
     transactionID: hexStringToUint8Array(hash),
     registrant: account,
     expiryDate: expires,
+  };
+  const nameRegisteredEvent = new NameRegistered(eventData);
+
+  const registrationEvent = new RegistrationEvent({
+    ...eventData,
+    nameRegistered: nameRegisteredEvent,
   });
 
-  await Promise.all([
-    ctx.store.save(domain),
-    ctx.store.save(registration),
-    ctx.store.save(registrationEvent),
-  ]);
+  registrationEvents.set(registrationEvent.id, registrationEvent);
+  domains.set(domain.id, domain);
+  registrations.set(registration.id, registration);
+  nameRegisteredEvents.set(nameRegisteredEvent.id, nameRegisteredEvent);
 }
 
-async function setNamePreimage(
-  ctx: DataHandlerContext<
-    Store,
-    {
-      transaction: {
-        from: true;
-        value: true;
-        hash: true;
-      };
-    }
-  >,
+function setNamePreimage(
   name: string,
   label: string,
   cost: bigint,
-): Promise<void> {
+  domains: Map<string, Domain>,
+  registrations: Map<string, Registration>,
+) {
   if (!checkValidLabel(name)) {
     return;
   }
@@ -110,78 +111,97 @@ async function setNamePreimage(
     concatUint8Arrays(rootNode, hexStringToUint8Array(label)),
   );
 
-  const domain = await ctx.store.findOneBy(Domain, { id: domainId });
+  const domain = domains.get(domainId);
   if (domain && domain.labelName !== name) {
     domain.labelName = name;
     domain.name = name + '.eth';
-    await ctx.store.save(domain);
+    domains.set(domain.id, domain);
   }
 
-  const registration = await ctx.store.findOneBy(Registration, { id: label });
+  const registration = registrations.get(label);
   if (registration == null) return;
   registration.labelName = name;
   registration.cost = cost;
-  await ctx.store.save(registration);
+  registrations.set(registration.id, registration);
 }
 
 export async function handleNameRegisteredByControllerOld(
   data: EthRegistrarInterface.INameRegisteredOld,
+  domains: Map<string, Domain>,
+  registrations: Map<string, Registration>,
 ): Promise<void> {
-  const { ctx, name, label, cost } = data;
-  await setNamePreimage(ctx, name, label, cost);
+  const { name, label, cost } = data;
+  await setNamePreimage(name, label, cost, domains, registrations);
 }
 
-export async function handleNameRegisteredByController(
+export function handleNameRegisteredByController(
   data: EthRegistrarInterface.INameRegisteredByController,
-): Promise<void> {
-  const { name, label, owner, baseCost, premium, expires, ctx } = data;
+  domains: Map<string, Domain>,
+  registrations: Map<string, Registration>,
+) {
+  const { name, label, baseCost, premium } = data;
   const totalConst = baseCost + premium;
-  await setNamePreimage(ctx, name, label, totalConst);
+  setNamePreimage(name, label, totalConst, domains, registrations);
 }
 
 export async function handleNameRenewedByController(
   data: EthRegistrarInterface.INameRenewedByController,
+  domains: Map<string, Domain>,
+  registrations: Map<string, Registration>,
 ): Promise<void> {
-  const { ctx, name, label, cost } = data;
-  await setNamePreimage(ctx, name, label, cost);
+  const { name, label, cost } = data;
+  await setNamePreimage(name, label, cost, domains, registrations);
 }
 
 export async function handleNameRenewed(
   data: EthRegistrarInterface.INameRenewed,
+  domains: Map<string, Domain>,
+  registrations: Map<string, Registration>,
+  registrationEvents: Map<string, RegistrationEvent>,
+  nameRenewedEvents: Map<string, NameRenewed>,
 ): Promise<void> {
-  const { blockNumber, ctx, expires, hash, id, logIndex } = data;
+  const { blockNumber, expires, hash, id, logIndex } = data;
   const label = uint256ToUint8Array(id);
   const registrationId = uint8ArrayToHexString(label);
-  const registration = await ctx.store.findOneBy(Registration, {
-    id: registrationId,
-  });
+  const registration = registrations.get(registrationId);
 
   const domainId = keccak256(concatUint8Arrays(rootNode, label));
-  const domain = await ctx.store.findOneBy(Domain, { id: domainId })!;
+  const domain = domains.get(domainId);
 
   if (registration) registration.expiryDate = expires;
   if (domain) domain.expiryDate = expires + GRACE_PERIOD_SECONDS;
 
   const eventId = createEventID(blockNumber, logIndex);
-  const registrationEvent = new NameRenewed({
+
+  const eventData = {
     id: eventId,
     registration,
     blockNumber,
     transactionID: hexStringToUint8Array(hash),
     expiryDate: expires,
+  };
+  const nameRenewedEvent = new NameRenewed(eventData);
+
+  const registrationEvent = new RegistrationEvent({
+    ...eventData,
+    nameRenewed: nameRenewedEvent,
   });
 
-  await Promise.all([
-    ctx.store.save(registrationEvent),
-    domain && ctx.store.save(domain),
-    registration && ctx.store.save(registration),
-  ]);
+  if (domain) domains.set(domain.id, domain);
+  if (registration) registrations.set(registration.id, registration);
+  nameRenewedEvents.set(nameRenewedEvent.id, nameRenewedEvent);
+  registrationEvents.set(registrationEvent.id, registrationEvent);
 }
 
-export async function handleNameTransferred(
+export function handleNameTransferred(
   data: EthRegistrarInterface.ITransfer,
-): Promise<void> {
-  const { to, ctx, blockNumber, hash, logIndex, tokenId } = data;
+  accounts: Map<string, Account>,
+  domains: Map<string, Domain>,
+  registrations: Map<string, Registration>,
+  registrationEvents: Map<string, RegistrationEvent>,
+  transferEvents: Map<string, NameTransferred>,
+) {
+  const { to, blockNumber, hash, logIndex, tokenId } = data;
   let account = new Account({
     id: to,
   });
@@ -189,28 +209,37 @@ export async function handleNameTransferred(
   // let label = uint256ToByteArray(event.params.tokenId);
   const label = uint256ToUint8Array(tokenId);
 
-  const registration = await ctx.store.findOneBy(Registration, {
-    id: uint8ArrayToHexString(label),
-  });
-  if (registration == null) return;
+  const registrationId = uint8ArrayToHexString(label);
+  const registration = registrations.get(registrationId);
 
   const domainId = keccak256(concatUint8Arrays(rootNode, label));
-  const domain = await ctx.store.findOneBy(Domain, { id: domainId });
+  const domain = domains.get(domainId);
 
-  if (registration) registration.registrant = account;
-  if (domain) domain.registrant = account;
+  if (registration) {
+    registration.registrant = account;
+    registrations.set(registration.id, registration);
+  }
+  if (domain) {
+    domain.registrant = account;
+    domains.set(domain.id, domain);
+  }
 
   const eventId = createEventID(blockNumber, logIndex);
-  const transferEvent = new NameTransferred({
+
+  const eventData = {
     id: eventId,
     registration,
     blockNumber,
     transactionID: hexStringToUint8Array(hash),
     newOwner: account,
+  };
+  const transferEvent = new NameTransferred(eventData);
+  const registrationEvent = new RegistrationEvent({
+    ...eventData,
+    nameTransferred: transferEvent,
   });
 
-  await ctx.store.save(account);
-  await ctx.store.save(transferEvent);
-  if (domain) await ctx.store.save(domain);
-  if (registration) await ctx.store.save(registration);
+  accounts.set(account.id, account);
+  transferEvents.set(transferEvent.id, transferEvent);
+  registrationEvents.set(registrationEvent.id, registrationEvent);
 }

@@ -1,4 +1,3 @@
-import { DataHandlerContext } from '@subsquid/evm-processor';
 import {
   Account,
   Resolver,
@@ -15,7 +14,6 @@ import {
   TextChanged,
   VersionChanged,
 } from '../model';
-import { Store } from '@subsquid/typeorm-store';
 import { createEventID, hexStringToUint8Array } from '../utils';
 import { ResolverInterface } from '../interfaces';
 
@@ -23,69 +21,47 @@ function createResolverID(node: string, resolver: string): string {
   return resolver.concat('-').concat(node);
 }
 
-async function getOrCreateResolver(
-  ctx: DataHandlerContext<
-    Store,
-    {
-      transaction: {
-        from: true;
-        value: true;
-        hash: true;
-      };
-    }
-  >,
+function getOrCreateResolver(
+  resolvers: Map<string, Resolver>,
+  domains: Map<string, Domain>,
   node: string,
   address: string,
-): Promise<Resolver> {
+): Resolver {
   const id = createResolverID(node, address);
-  const resolver = await ctx.store.findOneBy(Resolver, { id });
+  const resolver = resolvers.get(id);
 
   if (resolver) return resolver;
 
-  const [domain] = await Promise.all([
-    ctx.store.findOneBy(Domain, { id: node }),
-  ]);
-
+  const domain = domains.get(node);
   const newResolver = new Resolver({
     id,
     domain,
     address: hexStringToUint8Array(address),
   });
 
-  await ctx.store.save(newResolver);
+  resolvers.set(newResolver.id, newResolver);
   return newResolver;
 }
 
 export async function handleAddrChanged(
-  ctx: DataHandlerContext<
-    Store,
-    {
-      transaction: {
-        from: true;
-        value: true;
-        hash: true;
-      };
-    }
-  >,
-  node: string,
-  a: string,
-  address: string,
-  blockNumber: number,
-  logIndex: number,
-  hash: string,
+  data: ResolverInterface.IAddrChanged,
+  domains: Map<string, Domain>,
+  accounts: Map<string, Account>,
+  resolvers: Map<string, Resolver>,
+  resolveEvents: Map<string, ResolverEvent>,
+  addrChangedEvents: Map<string, AddrChanged>,
 ): Promise<void> {
+  const { a, node, address, hash, blockNumber, logIndex } = data;
   const account = new Account({
     id: a,
   });
 
-  const domain = await ctx.store.findOneBy(Domain, {
-    id: node,
-  });
+  const domain = domains.get(node);
 
   const resolverId = createResolverID(node, address);
   if (domain && domain.resolver?.id == resolverId) {
     domain.resolvedAddress = account;
-    await ctx.store.save(domain);
+    domains.set(domain.id, domain);
   }
 
   const resolver = new Resolver({
@@ -103,31 +79,30 @@ export async function handleAddrChanged(
     transactionID: hexStringToUint8Array(hash),
     addr: account,
   };
-  const addrChangedEvent = new AddrChanged(dataEvent);
-  const resolveEvent = new ResolverEvent(dataEvent);
 
-  await ctx.store.save(account);
-  await ctx.store.save(resolver);
-  await Promise.all([
-    ctx.store.save(resolveEvent),
-    ctx.store.save(addrChangedEvent),
-  ]);
+  const addrChangedEvent = new AddrChanged(dataEvent);
+  const resolveEvent = new ResolverEvent({
+    ...dataEvent,
+    addrChanged: addrChangedEvent,
+  });
+
+  accounts.set(account.id, account);
+  resolvers.set(resolver.id, resolver);
+
+  resolveEvents.set(resolveEvent.id, resolveEvent);
+  addrChangedEvents.set(addrChangedEvent.id, addrChangedEvent);
 }
 
 export async function handleMulticoinAddrChanged(
   data: ResolverInterface.IMulticoinAddrChanged,
+  domains: Map<string, Domain>,
+  resolvers: Map<string, Resolver>,
+  resolverEvents: Map<string, ResolverEvent>,
+  changeAddressEvents: Map<string, MulticoinAddrChanged>,
 ): Promise<void> {
-  const {
-    ctx,
-    node,
-    coinType,
-    newAddress,
-    address,
-    blockNumber,
-    logIndex,
-    hash,
-  } = data;
-  const resolver = await getOrCreateResolver(ctx, node, address);
+  const { node, coinType, newAddress, address, blockNumber, logIndex, hash } =
+    data;
+  const resolver = getOrCreateResolver(resolvers, domains, node, address);
 
   if (!resolver.coinTypes) {
     resolver.coinTypes = [coinType];
@@ -138,7 +113,8 @@ export async function handleMulticoinAddrChanged(
       resolver.coinTypes = coinTypes;
     }
   }
-  await ctx.store.save(resolver);
+
+  resolvers.set(resolver.id, resolver);
 
   const eventId = createEventID(blockNumber, logIndex);
   const dataEvent = {
@@ -149,56 +125,57 @@ export async function handleMulticoinAddrChanged(
     coinType: BigInt(coinType),
     addr: newAddress ? hexStringToUint8Array(newAddress) : new Uint8Array(),
   };
-  const resolverEvent = new ResolverEvent(dataEvent);
-  const eventChangeAddress = new MulticoinAddrChanged(dataEvent);
+  const changeAddressEvent = new MulticoinAddrChanged(dataEvent);
 
-  await Promise.all([
-    ctx.store.save(resolverEvent),
-    ctx.store.save(eventChangeAddress),
-  ]);
+  const resolverEvent = new ResolverEvent({
+    ...dataEvent,
+    multicoinAddrChanged: changeAddressEvent,
+  });
+
+  resolverEvents.set(resolverEvent.id, resolverEvent);
+  changeAddressEvents.set(changeAddressEvent.id, changeAddressEvent);
 }
 
-export async function handleNameChanged(
+export function handleNameChanged(
   data: ResolverInterface.INameChanged,
-): Promise<void> {
-  const { ctx, address, blockNumber, logIndex, hash, node, name } = data;
+  resolvers: Map<string, Resolver>,
+  resolverEvents: Map<string, ResolverEvent>,
+  nameChangedEvents: Map<string, NameChanged>,
+) {
+  const { address, blockNumber, logIndex, hash, node, name } = data;
   if (name.indexOf('\u0000') != -1) return;
 
   const eventId = createEventID(blockNumber, logIndex);
   const resolverId = createResolverID(node, address);
-  const resolver = await ctx.store.findOneBy(Resolver, { id: resolverId });
-  const resolverEvent = new NameChanged({
+  const resolver = resolvers.get(resolverId);
+
+  const eventData = {
     id: eventId,
     resolver,
     blockNumber,
     transactionID: hexStringToUint8Array(hash),
     name,
-  });
+  };
+  const nameChangedEvent = new NameChanged(eventData);
 
-  await ctx.store.save(resolverEvent);
+  const resolverEvent = new ResolverEvent({
+    ...eventData,
+    nameChanged: nameChangedEvent,
+  });
+  resolverEvents.set(resolverEvent.id, resolverEvent);
+  nameChangedEvents.set(nameChangedEvent.id, nameChangedEvent);
 }
 
-export async function handleABIChanged(
-  ctx: DataHandlerContext<
-    Store,
-    {
-      transaction: {
-        from: true;
-        value: true;
-        hash: true;
-      };
-    }
-  >,
-  node: string,
-  contentType: bigint,
-  address: string,
-  blockNumber: number,
-  logIndex: number,
-  hash: string,
+export function handleABIChanged(
+  data: ResolverInterface.IABIChanged,
+  resolvers: Map<string, Resolver>,
+  resolverEvents: Map<string, ResolverEvent>,
+  abiChangedEvents: Map<string, AbiChanged>,
 ) {
+  const { blockNumber, logIndex, contentType, hash, node, address } = data;
   const eventId = createEventID(blockNumber, logIndex);
   const resolverId = createResolverID(node, address);
-  const resolver = await ctx.store.findOneBy(Resolver, { id: resolverId });
+  const resolver = resolvers.get(resolverId);
 
   const dataEvent = {
     id: eventId,
@@ -207,120 +184,169 @@ export async function handleABIChanged(
     transactionID: hexStringToUint8Array(hash),
     contentType,
   };
-  const adiChangedEvent = new AbiChanged(dataEvent);
-  const resolveEvent = new ResolverEvent(dataEvent);
-  await Promise.all([
-    ctx.store.save(adiChangedEvent),
-    ctx.store.save(resolveEvent),
-  ]);
+  const abiChangedEvent = new AbiChanged(dataEvent);
+  const resolveEvent = new ResolverEvent({
+    ...dataEvent,
+    abiChanged: abiChangedEvent,
+  });
+
+  resolverEvents.set(resolveEvent.id, resolveEvent);
+  abiChangedEvents.set(abiChangedEvent.id, abiChangedEvent);
 }
 
-export async function handlePubkeyChanged(
+export function handlePubkeyChanged(
   data: ResolverInterface.IPubkeyChanged,
-): Promise<void> {
-  const { ctx, address, blockNumber, logIndex, hash, node, x, y } = data;
+  resolvers: Map<string, Resolver>,
+  resolverEvents: Map<string, ResolverEvent>,
+  pubKeyChangedEvents: Map<string, PubkeyChanged>,
+) {
+  const { address, blockNumber, logIndex, hash, node, x, y } = data;
 
   const eventId = createEventID(blockNumber, logIndex);
   const resolverId = createResolverID(node, address);
-  const resolver = await ctx.store.findOneBy(Resolver, { id: resolverId });
+  const resolver = resolvers.get(resolverId);
 
-  const resolverEvent = new PubkeyChanged({
+  const eventData = {
     id: eventId,
     resolver,
     blockNumber,
     transactionID: hexStringToUint8Array(hash),
     x: x ? hexStringToUint8Array(x) : new Uint8Array(),
     y: y ? hexStringToUint8Array(y) : new Uint8Array(),
+  };
+  const pubKeyChangedEvent = new PubkeyChanged(eventData);
+
+  const resolverEvent = new ResolverEvent({
+    ...eventData,
+    pubkeyChanged: pubKeyChangedEvent,
   });
 
-  await ctx.store.save(resolverEvent);
+  resolverEvents.set(resolverEvent.id, resolverEvent);
+  pubKeyChangedEvents.set(pubKeyChangedEvent.id, pubKeyChangedEvent);
 }
 
-export async function handleTextChanged(
+export function handleTextChanged(
   data: ResolverInterface.ITextChanged,
-): Promise<void> {
-  const { ctx, address, blockNumber, logIndex, hash, node, key } = data;
-  const resolver = await getOrCreateResolver(ctx, node, address);
+  domains: Map<string, Domain>,
+  resolvers: Map<string, Resolver>,
+  resolverEvents: Map<string, ResolverEvent>,
+  textChangedEvents: Map<string, TextChanged>,
+) {
+  const { address, blockNumber, logIndex, hash, node, key } = data;
+  const resolver = getOrCreateResolver(resolvers, domains, node, address);
 
   if (resolver.texts == null) {
     resolver.texts = [key];
-    await ctx.store.save(resolver);
+    resolvers.set(resolver.id, resolver);
   } else {
     const texts = resolver.texts!;
     if (!texts.includes(key)) {
       texts.push(key);
       resolver.texts = texts;
-      await ctx.store.save(resolver);
+      resolvers.set(resolver.id, resolver);
     }
   }
 
   const eventId = createEventID(blockNumber, logIndex);
-  const resolverEvent = new TextChanged({
+  const eventData = {
     id: eventId,
     resolver,
     blockNumber,
     transactionID: hexStringToUint8Array(hash),
     key,
-  });
+  };
+  const textChangedEvent = new TextChanged(eventData);
 
-  await ctx.store.save(resolverEvent);
+  const resolverEvent = new ResolverEvent({
+    ...eventData,
+    textChanged: textChangedEvent,
+  });
+  resolverEvents.set(resolverEvent.id, resolverEvent);
+  textChangedEvents.set(textChangedEvent.id, textChangedEvent);
 }
 
-export async function handleTextChangedWithValue(
+export function handleTextChangedWithValue(
   data: ResolverInterface.ITextChangedWithValue,
-): Promise<void> {
-  const { ctx, address, blockNumber, logIndex, hash, node, key, value } = data;
-  const resolver = await getOrCreateResolver(ctx, node, address);
+  domains: Map<string, Domain>,
+  resolvers: Map<string, Resolver>,
+  resolverEvents: Map<string, ResolverEvent>,
+  textChangedEvents: Map<string, TextChanged>,
+) {
+  const { address, blockNumber, logIndex, hash, node, key, value } = data;
+  const resolver = getOrCreateResolver(resolvers, domains, node, address);
 
   if (resolver.texts == null) {
     resolver.texts = [key];
-    await ctx.store.save(resolver);
+    resolvers.set(resolver.id, resolver);
   } else {
     const texts = resolver.texts!;
     if (!texts.includes(key)) {
       texts.push(key);
       resolver.texts = texts;
-      await ctx.store.save(resolver);
+      resolvers.set(resolver.id, resolver);
     }
   }
 
   const eventId = createEventID(blockNumber, logIndex);
-  const resolverEvent = new TextChanged({
+  const eventData = {
     id: eventId,
     resolver,
     blockNumber,
     transactionID: hexStringToUint8Array(hash),
     key,
     value,
-  });
+  };
+  const textChangedEvent = new TextChanged(eventData);
 
-  await ctx.store.save(resolverEvent);
+  const resolverEvent = new ResolverEvent({
+    ...eventData,
+    textChanged: textChangedEvent,
+  });
+  resolverEvents.set(resolverEvent.id, resolverEvent);
+  textChangedEvents.set(textChangedEvent.id, textChangedEvent);
 }
 
-export async function handleContentHashChanged(
+export function handleContentHashChanged(
   event: ResolverInterface.IContenthashChanged,
-): Promise<void> {
-  const { ctx, node, contentHash, hash, blockNumber, address, logIndex } =
-    event;
+  resolvers: Map<string, Resolver>,
+  domains: Map<string, Domain>,
+  resolverEvents: Map<string, ResolverEvent>,
+  contenthashChangedEvents: Map<string, ContenthashChanged>,
+) {
+  const { node, contentHash, hash, blockNumber, address, logIndex } = event;
 
-  const resolver = await getOrCreateResolver(ctx, node, address);
+  const resolver = getOrCreateResolver(resolvers, domains, node, address);
 
   resolver.contentHash = hexStringToUint8Array(contentHash);
-  await ctx.store.save(resolver);
+  resolvers.set(resolver.id, resolver);
 
-  const resolverEvent = new ContenthashChanged({
+  const eventData = {
     id: createEventID(blockNumber, logIndex),
     resolver,
     blockNumber,
     transactionID: hexStringToUint8Array(hash),
     hash: resolver.contentHash,
+  };
+
+  const contenthashChangedEvent = new ContenthashChanged(eventData);
+
+  const resolverEvent = new ResolverEvent({
+    ...eventData,
+    contenthashChanged: contenthashChangedEvent,
   });
-  await ctx.store.save(resolverEvent);
+  resolverEvents.set(resolverEvent.id, resolverEvent);
+  contenthashChangedEvents.set(
+    contenthashChangedEvent.id,
+    contenthashChangedEvent,
+  );
 }
 
-export async function handleInterfaceChanged(
+export function handleInterfaceChanged(
   data: ResolverInterface.IInterfaceChanged,
-): Promise<void> {
+  resolvers: Map<string, Resolver>,
+  resolverEvents: Map<string, ResolverEvent>,
+  interfaceChangedEvents: Map<string, InterfaceChanged>,
+) {
   const {
     node,
     interfaceID,
@@ -328,14 +354,14 @@ export async function handleInterfaceChanged(
     hash,
     blockNumber,
     logIndex,
-    ctx,
     address,
   } = data;
 
   const eventId = createEventID(blockNumber, logIndex);
   const resolverId = createResolverID(node, address);
-  const resolver = await ctx.store.findOneBy(Resolver, { id: resolverId });
-  const resolverEvent = new InterfaceChanged({
+  const resolver = resolvers.get(resolverId);
+
+  const eventData = {
     id: eventId,
     resolver,
     blockNumber,
@@ -346,16 +372,24 @@ export async function handleInterfaceChanged(
     implementer: implementer
       ? hexStringToUint8Array(implementer)
       : new Uint8Array(),
+  };
+  const interfaceChangedEvent = new InterfaceChanged(eventData);
+  const resolverEvent = new ResolverEvent({
+    ...eventData,
+    interfaceChanged: interfaceChangedEvent,
   });
 
-  await ctx.store.save(resolverEvent);
+  resolverEvents.set(resolverEvent.id, resolverEvent);
+  interfaceChangedEvents.set(interfaceChangedEvent.id, interfaceChangedEvent);
 }
 
-export async function handleAuthorisationChanged(
+export function handleAuthorisationChanged(
   data: ResolverInterface.IAuthorisationChanged,
-): Promise<void> {
+  resolvers: Map<string, Resolver>,
+  authorizationEvents: Map<string, AuthorisationChanged>,
+  resolverEvents: Map<string, ResolverEvent>,
+): void {
   const {
-    ctx,
     blockNumber,
     logIndex,
     hash,
@@ -368,7 +402,7 @@ export async function handleAuthorisationChanged(
 
   const eventId = createEventID(blockNumber, logIndex);
   const resolverId = createResolverID(node, address);
-  const resolver = await ctx.store.findOneBy(Resolver, { id: resolverId });
+  const resolver = resolvers.get(resolverId);
   const eventData = {
     id: eventId,
     blockNumber,
@@ -381,35 +415,51 @@ export async function handleAuthorisationChanged(
 
   const authorizationEvent = new AuthorisationChanged(eventData);
 
-  await ctx.store.save(authorizationEvent);
+  const resolverEvent = new ResolverEvent({
+    ...eventData,
+    authorisationChanged: authorizationEvent,
+  });
+  authorizationEvents.set(authorizationEvent.id, authorizationEvent);
+  resolverEvents.set(resolverEvent.id, resolverEvent);
 }
 
 export async function handleVersionChanged(
   data: ResolverInterface.IVersionChanged,
+  domains: Map<string, Domain>,
+  resolvers: Map<string, Resolver>,
+  resolverEvents: Map<string, ResolverEvent>,
+  versionChangedEvents: Map<string, VersionChanged>,
 ): Promise<void> {
-  const { ctx, blockNumber, logIndex, hash, node, address, newVersion } = data;
+  const { blockNumber, logIndex, hash, node, address, newVersion } = data;
 
   const eventId = createEventID(blockNumber, logIndex);
-  const resolver = await getOrCreateResolver(ctx, node, address);
+  const resolver = getOrCreateResolver(resolvers, domains, node, address);
 
-  const resolverEvent = new VersionChanged({
+  const eventData = {
     id: eventId,
     resolver,
     blockNumber,
     transactionID: hexStringToUint8Array(hash),
     version: newVersion,
-  });
+  };
+  const versionChangedEvent = new VersionChanged(eventData);
 
-  await ctx.store.save(resolverEvent);
-  const domain = await ctx.store.findOneBy(Domain, { id: node });
+  const resolverEvent = new ResolverEvent({
+    ...eventData,
+    versionChanged: versionChangedEvent,
+  });
+  resolverEvents.set(resolverEvent.id, resolverEvent);
+  versionChangedEvents.set(versionChangedEvent.id, versionChangedEvent);
+
+  const domain = domains.get(node);
   if (domain && domain.resolver === resolverEvent.resolver) {
     domain.resolvedAddress = null;
-    await ctx.store.save(domain);
+    domains.set(domain.id, domain);
   }
 
   resolver.addr = null;
   resolver.contentHash = null;
   resolver.texts = null;
   resolver.coinTypes = null;
-  await ctx.store.save(resolver);
+  resolvers.set(resolver.id, resolver);
 }

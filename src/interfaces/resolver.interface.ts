@@ -1,22 +1,13 @@
-import { DataHandlerContext } from '@subsquid/evm-processor';
-import { Store } from '@subsquid/typeorm-store';
-
 export interface IBase {
-  ctx: DataHandlerContext<
-    Store,
-    {
-      transaction: {
-        from: true;
-        value: true;
-        hash: true;
-      };
-    }
-  >;
   blockNumber: number;
   logIndex: number;
   hash: string;
   node: string;
   address: string;
+}
+
+export interface IAddrChanged extends IBase {
+  a: string;
 }
 
 export interface IMulticoinAddrChanged extends IBase {
@@ -59,4 +50,8 @@ export interface ITextChangedWithValue extends IBase {
 
 export interface IVersionChanged extends IBase {
   newVersion: bigint;
+}
+
+export interface IABIChanged extends IBase {
+  contentType: bigint;
 }

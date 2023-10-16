@@ -96,29 +96,29 @@ export function checkValidLabel(name: string): boolean {
   return true;
 }
 
-export async function createOrLoadAccount(
-  ctx: any,
+export function createOrLoadAccount(
+  accounts: Map<string, Account>,
   address: string,
-): Promise<Account> {
-  const account = await ctx.store.findOneBy(Account, { id: address });
+): Account {
+  const account = accounts.get(address);
   if (!account) {
     const newAccount = new Account({ id: address });
-    await ctx.store.save(newAccount);
+    accounts.set(newAccount.id, newAccount);
     return newAccount;
   }
 
   return account;
 }
 
-export async function createOrLoadDomain(
-  ctx: any,
+export function createOrLoadDomain(
+  domains: Map<string, Domain>,
   node: string,
-): Promise<Domain> {
-  const domain = await ctx.store.findOneBy(Domain, { id: node });
+): Domain {
+  const domain = domains.get(node);
   if (!domain) {
     const newDomain = new Domain({ id: node });
-    await ctx.store.save(newDomain);
+    domains.set(newDomain.id, newDomain);
+    return newDomain;
   }
-
   return domain;
 }

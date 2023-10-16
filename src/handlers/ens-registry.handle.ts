@@ -52,23 +52,12 @@ function createDomain(node: string, timestamp: bigint): Domain {
   return domain;
 }
 
-async function getDomain(
+function getDomain(
   node: string,
-  ctx: DataHandlerContext<
-    Store,
-    {
-      transaction: {
-        from: true;
-        value: true;
-        hash: true;
-      };
-    }
-  >,
+  domains: Map<string, Domain>,
   timestamp: bigint = BIG_INT_ZERO,
-): Promise<Domain | undefined> {
-  const domain = await ctx.store.findOneBy(Domain, {
-    id: node,
-  });
+): Domain | undefined {
+  const domain = domains.get(node);
   if (domain && node == ROOT_NODE) {
     return createDomain(node, timestamp);
   } else {
@@ -76,19 +65,10 @@ async function getDomain(
   }
 }
 
-async function recurseDomainDelete(
+function recurseDomainDelete(
   domain: Domain,
-  ctx: DataHandlerContext<
-    Store,
-    {
-      transaction: {
-        from: true;
-        value: true;
-        hash: true;
-      };
-    }
-  >,
-): Promise<string | null> {
+  domains: Map<string, Domain>,
+): string | null {
   if (
     (!domain.resolver ||
       uint8ArrayToHexString(domain.resolver.address).split('-')[0] ==
@@ -98,14 +78,12 @@ async function recurseDomainDelete(
     domain.subdomainCount == 0
   ) {
     if (domain.parent) {
-      const parentDomain = await ctx.store.findOneBy(Domain, {
-        id: domain.parent.id,
-      });
+      const parentDomain = domains.get(domain.parent.id);
       if (parentDomain) {
         parentDomain.subdomainCount = parentDomain.subdomainCount - 1;
 
-        await ctx.store.save(parentDomain);
-        return await recurseDomainDelete(parentDomain, ctx);
+        domains.set(parentDomain.id, parentDomain);
+        return recurseDomainDelete(parentDomain, domains);
       }
 
       return null;
@@ -117,28 +95,23 @@ async function recurseDomainDelete(
 
 async function saveDomain(
   domain: Domain,
-  ctx: DataHandlerContext<
-    Store,
-    {
-      transaction: {
-        from: true;
-        value: true;
-        hash: true;
-      };
-    }
-  >,
+  domains: Map<string, Domain>,
 ): Promise<void> {
-  await recurseDomainDelete(domain, ctx);
-  await ctx.store.save(domain);
+  await recurseDomainDelete(domain, domains);
+
+  domains.set(domain.id, domain);
 }
 
 // Handler for NewOwner events
-export async function handleNewOwner(
+export function handleNewOwner(
   data: EnsRegistryInterface.INewOwner,
   isMigrated: boolean,
-): Promise<void> {
+  accounts: Map<string, Account>,
+  domains: Map<string, Domain>,
+  newOwnerEvents: Map<string, NewOwner>,
+  domainEvents: Map<string, DomainEvent>,
+): void {
   const {
-    ctx,
     node,
     label,
     blockNumber,
@@ -155,11 +128,12 @@ export async function handleNewOwner(
     registrations: [],
   });
 
-  await ctx.store.save(account);
+  //await ctx.store.save(account);
+  accounts.set(account.id, account);
   const subnode = makeSubnode(node, label);
 
-  let domain = await getDomain(subnode, ctx, BigInt(timestamp));
-  const parent = await getDomain(node, ctx);
+  let domain = getDomain(subnode, domains, BigInt(timestamp));
+  const parent = getDomain(node, domains);
 
   if (!domain) {
     domain = new Domain({
@@ -171,7 +145,7 @@ export async function handleNewOwner(
 
   if (!domain.parent && parent) {
     parent.subdomainCount = parent.subdomainCount + 1;
-    await ctx.store.save(parent);
+    domains.set(parent.id, parent);
     if (parent.labelName) domainLabels.set(label, parent.labelName);
   }
 
@@ -208,7 +182,7 @@ export async function handleNewOwner(
   domain.labelhash = hexStringToUint8Array(label);
   domain.isMigrated = isMigrated;
 
-  await saveDomain(domain, ctx);
+  saveDomain(domain, domains);
   const domainEventId = createEventID(blockNumber, logIndex);
 
   const newOwnerEvent = new NewOwner({
@@ -227,28 +201,30 @@ export async function handleNewOwner(
     newOwner: newOwnerEvent,
   });
 
-  await ctx.store.save(newOwnerEvent);
-  await ctx.store.save(domainEvent);
+  newOwnerEvents.set(newOwnerEvent.id, newOwnerEvent);
+  domainEvents.set(domainEvent.id, domainEvent);
 }
 
 // Handler for Transfer events
-export async function handleTransfer(
+export function handleTransfer(
   data: EnsRegistryInterface.ITransfer,
-): Promise<void> {
-  const { ctx, owner, node, blockNumber, logIndex, hash } = data;
+  accounts: Map<string, Account>,
+  domains: Map<string, Domain>,
+  transferEvents: Map<string, Transfer>,
+  domainEvents: Map<string, DomainEvent>,
+): void {
+  const { owner, node, blockNumber, logIndex, hash } = data;
   const account = new Account({
     id: owner,
   });
 
-  await ctx.store.save(account);
+  accounts.set(account.id, account);
   // Update the domain owner
-  const domain = await ctx.store.findOneBy(Domain, { id: node });
-  if (!domain) {
-    return;
+  const domain = domains.get(node);
+  if (domain) {
+    domain.owner = account;
+    domains.set(domain.id, domain);
   }
-
-  domain.owner = account;
-  await ctx.store.save(domain);
 
   const domainEventId = createEventID(blockNumber, logIndex);
   const transferEvent = new Transfer({
@@ -267,17 +243,21 @@ export async function handleTransfer(
     transfer: transferEvent,
   });
 
-  await ctx.store.save(transferEvent);
-  await ctx.store.save(domainEvent);
+  transferEvents.set(transferEvent.id, transferEvent);
+  domainEvents.set(domainEvent.id, domainEvent);
 }
 
 // Handler for NewResolver events
-export async function handleNewResolver(
+export function handleNewResolver(
   data: EnsRegistryInterface.INewResolver,
-): Promise<void> {
+  domains: Map<string, Domain>,
+  resolvers: Map<string, Resolver>,
+  newResolverEvents: Map<string, NewResolver>,
+  domainEvents: Map<string, DomainEvent>,
+): void {
   let id: string | null;
 
-  const { resolverAddress, node, ctx, blockNumber, logIndex, hash } = data;
+  const { resolverAddress, node, blockNumber, logIndex, hash } = data;
   // we don't want to create a resolver entity for 0x0
   if (resolverAddress == EMPTY_ADDRESS) {
     id = null;
@@ -285,7 +265,7 @@ export async function handleNewResolver(
     id = resolverAddress.concat('-').concat(node);
   }
 
-  const domain = await ctx.store.findOneBy(Domain, { id: node });
+  const domain = domains.get(node);
 
   if (!domain) {
     return;
@@ -293,7 +273,7 @@ export async function handleNewResolver(
   let resolver;
 
   if (id) {
-    resolver = await ctx.store.findOneBy(Resolver, { id });
+    resolver = resolvers.get(id);
     if (resolver == null) {
       resolver = new Resolver({
         id,
@@ -301,7 +281,7 @@ export async function handleNewResolver(
         address: hexStringToUint8Array(resolverAddress),
       });
 
-      await ctx.store.save(resolver);
+      resolvers.set(resolver.id, resolver);
       // since this is a new resolver entity, there can't be a resolved address yet so set to null
       domain.resolvedAddress = null;
     } else {
@@ -311,8 +291,7 @@ export async function handleNewResolver(
     domain.resolvedAddress = null;
   }
 
-  await ctx.store.save(domain);
-
+  domains.set(domain.id, domain);
   const eventId = createEventID(blockNumber, logIndex);
 
   const newResolverEvent = new NewResolver({
@@ -331,22 +310,26 @@ export async function handleNewResolver(
     newResolver: newResolverEvent,
   });
 
-  await ctx.store.save(newResolverEvent);
-  await ctx.store.save(domainEvent);
+  newResolverEvents.set(newResolverEvent.id, newResolverEvent);
+
+  domainEvents.set(domainEvent.id, domainEvent);
 }
 
 // Handler for NewTTL events
-export async function handleNewTTL(
+export function handleNewTTL(
   data: EnsRegistryInterface.INewTTL,
-): Promise<void> {
-  const { ctx, logIndex, hash, node, ttl, blockNumber } = data;
-  const domain = await ctx.store.findOneBy(Domain, { id: node });
+  domains: Map<string, Domain>,
+  newTTLEvents: Map<string, NewTTL>,
+  domainEvents: Map<string, DomainEvent>,
+): void {
+  const { logIndex, hash, node, ttl, blockNumber } = data;
+  const domain = domains.get(node);
 
   // For the edge case that a domain's owner and resolver are set to empty
   // in the same transaction as setting TTL
   if (domain) {
     domain.ttl = ttl;
-    await ctx.store.save(domain);
+    domains.set(domain.id, domain);
   }
   const eventId = createEventID(blockNumber, logIndex);
   const newTTLEvent = new NewTTL({
@@ -364,48 +347,76 @@ export async function handleNewTTL(
     domain,
     newTTL: newTTLEvent,
   });
-  await ctx.store.save(newTTLEvent);
-  await ctx.store.save(domainEvent);
+  newTTLEvents.set(newTTLEvent.id, newTTLEvent);
+  domainEvents.set(domainEvent.id, domainEvent);
 }
 
-export async function handleNewOwnerOldRegistry(
+export function handleNewOwnerOldRegistry(
   data: EnsRegistryInterface.INewOwner,
-): Promise<void> {
-  const { ctx, node, label, timestamp } = data;
+  accounts: Map<string, Account>,
+  domains: Map<string, Domain>,
+  newOwnerEvents: Map<string, NewOwner>,
+  domainEvents: Map<string, DomainEvent>,
+): void {
+  const { node, label, timestamp } = data;
   const subnode = makeSubnode(node, label);
-  let domain = await getDomain(subnode, ctx, BigInt(timestamp));
+  let domain = getDomain(subnode, domains, BigInt(timestamp));
 
   if (domain == null || domain.isMigrated == false) {
-    await handleNewOwner(data, false);
+    handleNewOwner(
+      data,
+      false,
+      accounts,
+      domains,
+      newOwnerEvents,
+      domainEvents,
+    );
   }
 }
 
-export async function handleTransferOldRegistry(
+export function handleTransferOldRegistry(
   data: EnsRegistryInterface.ITransfer,
-): Promise<void> {
-  const { node, ctx, timestamp } = data;
-  let domain = await getDomain(node, ctx, BigInt(timestamp))!;
+  accounts: Map<string, Account>,
+  domains: Map<string, Domain>,
+  transferEvents: Map<string, Transfer>,
+  domainEvents: Map<string, DomainEvent>,
+): void {
+  const { node, timestamp } = data;
+  let domain = getDomain(node, domains, BigInt(timestamp))!;
   if (domain && domain.isMigrated == false) {
-    await handleTransfer(data);
+    handleTransfer(data, accounts, domains, transferEvents, domainEvents);
   }
 }
 
-export async function handleNewTTLOldRegistry(
+export function handleNewTTLOldRegistry(
   data: EnsRegistryInterface.INewTTL,
-): Promise<void> {
-  const { node, ctx, timestamp } = data;
-  const domain = await getDomain(node, ctx, BigInt(timestamp))!;
+  domains: Map<string, Domain>,
+  newTTLEvents: Map<string, NewTTL>,
+  domainEvents: Map<string, DomainEvent>,
+): void {
+  const { node, timestamp } = data;
+  const domain = getDomain(node, domains, BigInt(timestamp))!;
   if (domain && domain.isMigrated == false) {
-    await handleNewTTL(data);
+    handleNewTTL(data, domains, newTTLEvents, domainEvents);
   }
 }
 
-export async function handleNewResolverOldRegistry(
+export function handleNewResolverOldRegistry(
   data: EnsRegistryInterface.INewResolver,
-): Promise<void> {
-  const { node, timestamp, ctx } = data;
-  const domain = await getDomain(node, ctx, BigInt(timestamp))!;
+  domains: Map<string, Domain>,
+  resolvers: Map<string, Resolver>,
+  newResolverEvents: Map<string, NewResolver>,
+  domainEvents: Map<string, DomainEvent>,
+): void {
+  const { node, timestamp } = data;
+  const domain = getDomain(node, domains, BigInt(timestamp));
   if (node == ROOT_NODE || (domain && !domain.isMigrated)) {
-    await handleNewResolver(data);
+    handleNewResolver(
+      data,
+      domains,
+      resolvers,
+      newResolverEvents,
+      domainEvents,
+    );
   }
 }
