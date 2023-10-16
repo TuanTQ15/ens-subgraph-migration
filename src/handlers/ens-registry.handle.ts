@@ -288,7 +288,6 @@ export async function handleNewResolver(
   const domain = await ctx.store.findOneBy(Domain, { id: node });
 
   if (!domain) {
-    console.log('new resolver null', domain);
     return;
   }
   let resolver;

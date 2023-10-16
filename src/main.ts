@@ -467,7 +467,7 @@ async function processDataNameWrapper(
   if (evmLog.topics[0] === NameWrapperEvent.NameWrapped.topic) {
     const { node, name, owner, fuses, expiry } =
       NameWrapperEvent.NameWrapped.decode(evmLog);
-    console.log('transfer name wrapped');
+
     await NameWrapperHandler.handleNameWrapped({
       node,
       name,
@@ -496,7 +496,7 @@ async function processDataNameWrapper(
 
   if (evmLog.topics[0] === NameWrapperEvent.FusesSet.topic) {
     const { node, fuses } = NameWrapperEvent.FusesSet.decode(evmLog);
-    console.log('transfer fusesSet');
+
     await NameWrapperHandler.handleFusesSet({
       node,
       fuses,
@@ -509,7 +509,7 @@ async function processDataNameWrapper(
 
   if (evmLog.topics[0] === NameWrapperEvent.ExpiryExtended.topic) {
     const { node, expiry } = NameWrapperEvent.ExpiryExtended.decode(evmLog);
-    console.log('transfer expiry extend');
+
     await NameWrapperHandler.handleExpiryExtended({
       node,
       expiry,
@@ -522,7 +522,7 @@ async function processDataNameWrapper(
 
   if (evmLog.topics[0] === NameWrapperEvent.TransferSingle.topic) {
     const { to, id } = NameWrapperEvent.TransferSingle.decode(evmLog);
-    console.log('transfer single');
+
     await NameWrapperHandler.handleTransferSingle({
       to,
       id,
@@ -535,7 +535,7 @@ async function processDataNameWrapper(
 
   if (evmLog.topics[0] === NameWrapperEvent.TransferBatch.topic) {
     const { to, ids } = NameWrapperEvent.TransferBatch.decode(evmLog);
-    console.log('transfer batch');
+
     await NameWrapperHandler.handleTransferBatch({
       to,
       ids,
@@ -550,7 +550,7 @@ async function processDataNameWrapper(
 processor.run(new TypeormDatabase({ supportHotBlocks: true }), async (ctx) => {
   for (const block of ctx.blocks) {
     const { header, logs } = block;
-    // console.log(header.height);
+
     for (const log of logs) {
       await processDataENSRegistry(ctx, log, header);
       await processResolver(ctx, log, header);
