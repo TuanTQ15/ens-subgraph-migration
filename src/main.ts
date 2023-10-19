@@ -398,56 +398,56 @@ function processResolver(evmLog: Log, header: BlockHeader) {
     );
   }
 
-  // // got RangeError: data out-of-bounds (buffer=0x, length=0, offset=32, code=BUFFER_OVERRUN, version=6.7.0)
-  // if (
-  //   evmLog.topics[0] ===
-  //   PublicResolverEvent['TextChanged(bytes32,string,string)'].topic
-  // ) {
-  //   if (blockRangeOutOf.includes(height)) return;
-  //   const { node, key } =
-  //     PublicResolverEvent['TextChanged(bytes32,string,string)'].decode(evmLog);
-  //   ResolverHandler.handleTextChanged(
-  //     {
-  //       address: evmLog.address,
-  //       blockNumber: height,
-  //       logIndex: evmLog.logIndex,
-  //       hash,
-  //       node,
-  //       key,
-  //     },
-  //     domains,
-  //     resolvers,
-  //     resolverEvents,
-  //     textChangedEvents,
-  //   );
-  // }
+  // got RangeError: data out-of-bounds (buffer=0x, length=0, offset=32, code=BUFFER_OVERRUN, version=6.7.0)
+  if (
+    evmLog.topics[0] ===
+    PublicResolverEvent['TextChanged(bytes32,string,string)'].topic
+  ) {
+    // if (blockRangeOutOf.includes(height)) return;
+    const { node, key } =
+      PublicResolverEvent['TextChanged(bytes32,string,string)'].decode(evmLog);
+    ResolverHandler.handleTextChanged(
+      {
+        address: evmLog.address,
+        blockNumber: height,
+        logIndex: evmLog.logIndex,
+        hash,
+        node,
+        key,
+      },
+      domains,
+      resolvers,
+      resolverEvents,
+      textChangedEvents,
+    );
+  }
 
-  // //got RangeError: data out-of-bounds (buffer=0x, length=0, offset=32, code=BUFFER_OVERRUN, version=6.7.0)
-  // if (
-  //   evmLog.topics[0] ===
-  //   PublicResolverEvent['TextChanged(bytes32,string,string,string)'].topic
-  // ) {
-  //   if (blockRangeOutOf.includes(height)) return;
-  //   const { node, key, value } =
-  //     PublicResolverEvent['TextChanged(bytes32,string,string,string)'].decode(
-  //       evmLog,
-  //     );
-  //   ResolverHandler.handleTextChangedWithValue(
-  //     {
-  //       address: evmLog.address,
-  //       blockNumber: height,
-  //       logIndex: evmLog.logIndex,
-  //       hash,
-  //       node,
-  //       key,
-  //       value,
-  //     },
-  //     domains,
-  //     resolvers,
-  //     resolverEvents,
-  //     textChangedEvents,
-  //   );
-  // }
+  //got RangeError: data out-of-bounds (buffer=0x, length=0, offset=32, code=BUFFER_OVERRUN, version=6.7.0)
+  if (
+    evmLog.topics[0] ===
+    PublicResolverEvent['TextChanged(bytes32,string,string,string)'].topic
+  ) {
+    //if (blockRangeOutOf.includes(height)) return;
+    const { node, key, value } =
+      PublicResolverEvent['TextChanged(bytes32,string,string,string)'].decode(
+        evmLog,
+      );
+    ResolverHandler.handleTextChangedWithValue(
+      {
+        address: evmLog.address,
+        blockNumber: height,
+        logIndex: evmLog.logIndex,
+        hash,
+        node,
+        key,
+        value,
+      },
+      domains,
+      resolvers,
+      resolverEvents,
+      textChangedEvents,
+    );
+  }
 
   if (evmLog.topics[0] === PublicResolverEvent.VersionChanged.topic) {
     const { node, newVersion } =
@@ -722,12 +722,16 @@ function processDataNameWrapper(evmLog: Log, header: BlockHeader) {
 processor.run(new TypeormDatabase({ supportHotBlocks: true }), async (ctx) => {
   for (const block of ctx.blocks) {
     const { header, logs } = block;
-    console.log(header.height);
     for (const log of logs) {
-      processDataENSRegistry(log, header);
-      processResolver(log, header); // range error at 4299559
-      processDataRegistrar(log, header);
-      processDataNameWrapper(log, header);
+      try {
+        processDataENSRegistry(log, header);
+        processResolver(log, header); // range error at 4299559
+        processDataRegistrar(log, header);
+        processDataNameWrapper(log, header);
+      } catch (e: any) {
+        console.error(`${header.height}: ${e.message}`);
+        continue;
+      }
     }
   }
 

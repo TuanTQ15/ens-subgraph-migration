@@ -1,4 +1,3 @@
-import { DataHandlerContext } from '@subsquid/evm-processor';
 import {
   Account,
   Domain,
@@ -17,7 +16,6 @@ import {
   uint8ArrayToHexString,
 } from '../utils';
 import { keccak256 } from 'ethers';
-import { Store } from '@subsquid/typeorm-store';
 import { EnsRegistryInterface } from '../interfaces';
 
 export const ROOT_NODE =

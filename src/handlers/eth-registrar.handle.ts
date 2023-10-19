@@ -22,8 +22,6 @@ import {
   uint8ArrayToHexString,
 } from '../utils';
 import { EthRegistrarInterface } from '../interfaces';
-import { DataHandlerContext } from '@subsquid/evm-processor';
-import { Store } from '@subsquid/typeorm-store';
 
 const GRACE_PERIOD_SECONDS = BigInt(7776000); // 90 days
 
@@ -67,9 +65,11 @@ export function handleNameRegistered(
   domain.expiryDate = expires + GRACE_PERIOD_SECONDS;
 
   const labelName = domainLabels.get(uint8ArrayToHexString(label));
+
   if (labelName) {
     domain.labelName = labelName;
     domain.name = labelName! + '.eth';
+    console.log(domain.name);
     registration.labelName = labelName;
   }
 
